@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::error::Error;
 use std::fs;
 
@@ -21,6 +22,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     let answer = process_lists(&list1, &list2);
     println!("Answer: {}", answer);
 
+    let answer2 = similarity_score(&list1, &list2);
+    println!("Answer 2: {}", answer2);
+
     Ok(())
 }
 
@@ -33,6 +37,18 @@ fn process_lists(list1: &[i32], list2: &[i32]) -> i32 {
     vec1.into_iter().zip(vec2).map(|(a, b)| (a - b).abs()).sum()
 }
 
+fn similarity_score(list1: &[i32], list2: &[i32]) -> i32 {
+    let mut frequency = HashMap::new();
+    for &n in list2 {
+        *frequency.entry(n).or_insert(0) += 1;
+    }
+
+    list1
+        .iter()
+        .map(|&n| n * frequency.get(&n).copied().unwrap_or(0))
+        .sum()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -42,5 +58,12 @@ mod tests {
         let list1 = vec![3, 4, 2, 1, 3, 3];
         let list2 = vec![4, 3, 5, 3, 9, 3];
         assert_eq!(process_lists(&list1, &list2), 11);
+    }
+
+    #[test]
+    fn test_similarity_score() {
+        let list1 = vec![3, 4, 2, 1, 3, 3];
+        let list2 = vec![4, 3, 5, 3, 9, 3];
+        assert_eq!(similarity_score(&list1, &list2), 31);
     }
 }
