@@ -22,17 +22,26 @@ fn main() -> std::io::Result<()> {
         .collect();
 
     let result = find_valid_updates_middle_sum(&rules, &updates);
+    let result2 = find_invalid_updates_middle_sum(&rules, &updates);
 
     println!("Result: {}", result);
-
+    println!("Result2: {}", result2);
     Ok(())
 }
 
-fn find_valid_updates_middle_sum(rules: &[(i32, i32)], updates: &[Vec<i32>]) -> i32 {
+pub fn find_valid_updates_middle_sum(rules: &[(i32, i32)], updates: &[Vec<i32>]) -> i32 {
     updates
         .into_iter()
         .filter(|seq| is_valid_update_sequence(seq, rules))
         .map(|seq| get_middle_number(seq))
+        .sum()
+}
+
+pub fn find_invalid_updates_middle_sum(rules: &[(i32, i32)], updates: &[Vec<i32>]) -> i32 {
+    find_invalid_updates(rules, updates)
+        .into_iter()
+        .map(|seq| reorder_invalid_update(rules, &seq))
+        .map(|seq| get_middle_number(&seq))
         .sum()
 }
 
@@ -54,6 +63,33 @@ fn is_valid_update_sequence(seq: &[i32], rules: &[(i32, i32)]) -> bool {
 
 fn get_middle_number(seq: &[i32]) -> i32 {
     seq[seq.len() / 2]
+}
+
+fn find_invalid_updates(rules: &[(i32, i32)], updates: &[Vec<i32>]) -> Vec<Vec<i32>> {
+    updates
+        .into_iter()
+        .filter(|seq| !is_valid_update_sequence(seq, rules))
+        .cloned()
+        .collect()
+}
+
+fn reorder_invalid_update(rules: &[(i32, i32)], seq: &[i32]) -> Vec<i32> {
+    let mut result = seq.to_vec();
+    let mut made_swap = true;
+
+    // Keep swapping until no swaps are made
+    while made_swap {
+        made_swap = false;
+
+        for i in 0..result.len() - 1 {
+            if rules.contains(&(result[i + 1], result[i])) {
+                result.swap(i, i + 1);
+                made_swap = true;
+            }
+        }
+    }
+
+    result
 }
 
 #[cfg(test)]
@@ -102,6 +138,7 @@ mod tests {
     fn test_find_valid_updates_middle_sum() {
         let rules = example_rules();
         let updates = example_updates();
+
         assert_eq!(find_valid_updates_middle_sum(&rules, &updates), 143);
     }
 
@@ -111,19 +148,14 @@ mod tests {
 
         // Valid seq #1
         assert!(is_valid_update_sequence(&vec![75, 47, 61, 53, 29], &rules));
-
         // Valid seq #2
         assert!(is_valid_update_sequence(&vec![97, 61, 53, 29, 13], &rules));
-
         // Valid seq #3
         assert!(is_valid_update_sequence(&vec![75, 29, 13], &rules));
-
         // Invalid seq #4
         assert!(!is_valid_update_sequence(&vec![75, 97, 47, 61, 53], &rules));
-
         // Invalid seq #5
         assert!(!is_valid_update_sequence(&vec![61, 13, 29], &rules));
-
         // Invalid seq #6
         assert!(!is_valid_update_sequence(&vec![97, 13, 75, 29, 47], &rules));
     }
@@ -132,5 +164,42 @@ mod tests {
     fn test_get_middle_number() {
         assert_eq!(get_middle_number(&vec![75, 47, 61, 53, 29]), 61);
         assert_eq!(get_middle_number(&vec![75, 29, 13]), 29);
+    }
+
+    #[test]
+    fn test_find_invalid_updates_middle_sum() {
+        let rules = example_rules();
+        let updates = example_updates();
+
+        assert_eq!(find_invalid_updates_middle_sum(&rules, &updates), 123);
+    }
+
+    #[test]
+    fn test_reorder_invalid_update() {
+        let rules = example_rules();
+
+        assert_eq!(
+            reorder_invalid_update(&rules, &vec![75, 97, 47, 61, 53]),
+            vec![97, 75, 47, 61, 53]
+        );
+        assert_eq!(
+            reorder_invalid_update(&rules, &vec![61, 13, 29]),
+            vec![61, 29, 13]
+        );
+        assert_eq!(
+            reorder_invalid_update(&rules, &vec![97, 13, 75, 29, 47]),
+            vec![97, 75, 47, 29, 13]
+        );
+    }
+
+    #[test]
+    fn test_find_invalid_updates() {
+        let rules = example_rules();
+        let updates = example_updates();
+        let invalid_updates = find_invalid_updates(&rules, &updates);
+
+        assert!(invalid_updates.contains(&vec![75, 97, 47, 61, 53]));
+        assert!(invalid_updates.contains(&vec![61, 13, 29]));
+        assert!(invalid_updates.contains(&vec![97, 13, 75, 29, 47]));
     }
 }
