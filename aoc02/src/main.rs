@@ -1,7 +1,7 @@
 use std::fs::read_to_string;
 
-fn main() {
-    let input = read_to_string("./02-input.txt").expect("Should be able to read the file");
+fn main() -> std::io::Result<()> {
+    let input = read_to_string("./02-input.txt")?;
 
     let reports: Vec<Vec<i16>> = input
         .lines()
