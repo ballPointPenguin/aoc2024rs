@@ -1,9 +1,11 @@
+use rayon::prelude::*;
 use std::collections::HashSet;
 use std::fs::read_to_string;
 use std::time::Instant;
 
 // First iteration: 89.5s
 // Second iteration: 88.5s
+// Parallel iteration: 13.4s
 
 fn main() -> std::io::Result<()> {
     let start = Instant::now();
@@ -62,31 +64,25 @@ fn simulate_guard_path(grid: &Grid, mut guard: Guard) -> (usize, bool) {
 }
 
 fn count_possible_loop_positions(input: &str) -> usize {
-    let mut grid = Grid::new(input);
+    let grid = Grid::new(input);
     let guard = Guard::new(grid.start_pos(), Direction::North);
-    let mut loop_count = 0;
 
-    for y in 0..grid.height {
-        for x in 0..grid.width {
-            let pos = (x, y);
+    // Create a vector of positions to test
+    let positions: Vec<(usize, usize)> = (0..grid.height)
+        .flat_map(|y| (0..grid.width).map(move |x| (x, y)))
+        .filter(|&pos| pos != grid.start_pos() && grid.get(pos) != Some('#'))
+        .collect();
 
-            // Skip invalid positions
-            if pos == grid.start_pos() || grid.get(pos) == Some('#') {
-                continue;
-            }
-
-            grid.place_obstacle(pos);
-
-            if let (_, true) = simulate_guard_path(&grid, guard.clone()) {
-                loop_count += 1;
-                println!("Loop count now: {}", loop_count);
-            }
-
-            grid.remove_obstacle(pos);
-        }
-    }
-
-    loop_count
+    // Use parallel iterator to process positions
+    positions
+        .par_iter()
+        .map(|&pos| {
+            let mut test_grid = grid.clone();
+            test_grid.place_obstacle(pos);
+            let (_, is_loop) = simulate_guard_path(&test_grid, guard.clone());
+            is_loop as usize
+        })
+        .sum()
 }
 
 #[derive(Clone)]
@@ -110,20 +106,17 @@ impl Grid {
 
     fn get(&self, pos: (usize, usize)) -> Option<char> {
         let (x, y) = pos;
-        self.cells.get(y).and_then(|row| row.get(x)).copied()
+        if x >= self.width || y >= self.height {
+            None
+        } else {
+            Some(self.cells[y][x])
+        }
     }
 
     fn place_obstacle(&mut self, pos: (usize, usize)) {
         let (x, y) = pos;
         if y < self.height && x < self.width {
             self.cells[y][x] = '#';
-        }
-    }
-
-    fn remove_obstacle(&mut self, pos: (usize, usize)) {
-        let (x, y) = pos;
-        if y < self.height && x < self.width {
-            self.cells[y][x] = '.';
         }
     }
 
@@ -142,6 +135,17 @@ enum Direction {
     East,
     South,
     West,
+}
+
+impl Direction {
+    fn turn_right(&self) -> Self {
+        match self {
+            Direction::North => Direction::East,
+            Direction::East => Direction::South,
+            Direction::South => Direction::West,
+            Direction::West => Direction::North,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -173,12 +177,7 @@ impl Guard {
     }
 
     fn turn_right(&mut self) {
-        self.facing = match self.facing {
-            Direction::North => Direction::East,
-            Direction::East => Direction::South,
-            Direction::South => Direction::West,
-            Direction::West => Direction::North,
-        }
+        self.facing = self.facing.turn_right();
     }
 
     fn move_forward(&mut self, grid: &Grid) -> bool {
