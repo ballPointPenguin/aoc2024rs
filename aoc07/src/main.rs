@@ -14,72 +14,77 @@ fn main() -> std::io::Result<()> {
 pub fn total_calibration_result(input: &str) -> i64 {
     input
         .lines()
-        .map(|line| parse_equation(line))
-        .filter(|eq| is_solvable(eq))
-        .map(|eq| eq.target)
+        .filter_map(|line| {
+            let eq = parse_equation(line);
+            is_solvable(&eq).then_some(eq.target)
+        })
         .sum()
 }
 
 pub fn total_calibration_result_concat(input: &str) -> i64 {
     input
         .lines()
-        .map(|line| parse_equation(line))
-        .filter(|eq| is_solvable_concat(eq))
-        .map(|eq| eq.target)
+        .filter_map(|line| {
+            let eq = parse_equation(line);
+            is_solvable_concat(&eq).then_some(eq.target)
+        })
         .sum()
 }
 
+#[derive(Debug, PartialEq, Eq, Clone)]
+struct Equation {
+    target: i64,
+    numbers: Vec<i64>,
+}
+
 fn parse_equation(input: &str) -> Equation {
-    let (target, numbers) = input.split_once(':').unwrap();
-    let target = target.parse().unwrap();
-    let numbers = numbers
-        .split_whitespace()
-        .map(|s| s.parse().unwrap())
-        .collect();
-    Equation { target, numbers }
+    let (target, numbers) = input.split_once(':').expect("Invalid input format");
+    Equation {
+        target: target.trim().parse().expect("Invalid target number"),
+        numbers: numbers
+            .split_whitespace()
+            .map(|s| s.parse().expect("Invalid number in sequence"))
+            .collect(),
+    }
 }
 
 fn is_solvable(equation: &Equation) -> bool {
     let num_operators = equation.numbers.len() - 1;
     let combinations = 2_i32.pow(num_operators as u32);
 
-    for i in 0..combinations {
+    (0..combinations).any(|i| {
         let mut result = equation.numbers[0];
 
         for pos in 0..num_operators {
             let next_num = equation.numbers[pos + 1];
             // Use bit at position 'pos' to determine operator
-            let use_multiply = (i & (1 << pos)) != 0;
+            let operator = (i & (1 << pos)) >> pos;
 
-            result = if use_multiply {
-                match result.checked_mul(next_num) {
-                    Some(val) => val,
-                    None => break, // Operation would overflow
-                }
-            } else {
-                match result.checked_add(next_num) {
-                    Some(val) => val,
-                    None => break, // Operation would overflow
-                }
-            };
+            // Early return if result exceeds target
+            if result > equation.target {
+                return false;
+            }
+
+            result = match operator {
+                0 => result.checked_add(next_num),
+                1 => result.checked_mul(next_num),
+                _ => unreachable!(),
+            }
+            .filter(|&val| val <= equation.target)
+            .unwrap_or(0);
         }
 
-        if result == equation.target {
-            return true;
-        }
-    }
-
-    false
+        result == equation.target
+    })
 }
 
 fn is_solvable_concat(equation: &Equation) -> bool {
     let num_operators = equation.numbers.len() - 1;
     let combinations = 3_i64.pow(num_operators as u32);
 
-    for i in 0..combinations {
+    (0..combinations).any(|i| {
         let mut result = equation.numbers[0];
         let mut combo = i;
-        let mut valid_sequence = true;
 
         for pos in 0..num_operators {
             let next_num = equation.numbers[pos + 1];
@@ -87,68 +92,27 @@ fn is_solvable_concat(equation: &Equation) -> bool {
             let operator = combo % 3;
             combo /= 3;
 
-            let next_result = match operator {
-                0 => match result.checked_add(next_num) {
-                    Some(sum) if sum > equation.target => {
-                        valid_sequence = false;
-                        break;
-                    }
-                    Some(sum) => sum,
-                    None => {
-                        valid_sequence = false;
-                        break;
-                    }
-                },
-                1 => match result.checked_mul(next_num) {
-                    Some(product) if product > equation.target => {
-                        valid_sequence = false;
-                        break;
-                    }
-                    Some(product) => product,
-                    None => {
-                        valid_sequence = false;
-                        break;
-                    }
-                },
-                2 => match concatenate(result, next_num) {
-                    Some(concatenated) if concatenated > equation.target => {
-                        valid_sequence = false;
-                        break;
-                    }
-                    Some(concatenated) => concatenated,
-                    None => {
-                        valid_sequence = false;
-                        break;
-                    }
-                },
+            // Early return if result exceeds target
+            if result > equation.target {
+                return false;
+            }
+
+            result = match operator {
+                0 => result.checked_add(next_num),
+                1 => result.checked_mul(next_num),
+                2 => concatenate(result, next_num),
                 _ => unreachable!(),
-            };
-
-            result = next_result;
+            }
+            .filter(|&val| val <= equation.target)
+            .unwrap_or(0);
         }
 
-        if valid_sequence && result == equation.target {
-            return true;
-        }
-    }
-
-    false
-}
-
-#[derive(Debug, PartialEq, Eq)]
-struct Equation {
-    target: i64,
-    numbers: Vec<i64>,
+        result == equation.target
+    })
 }
 
 fn concatenate(a: i64, b: i64) -> Option<i64> {
-    let b_digits = if b == 0 {
-        1
-    } else {
-        (b as f64).log10().floor() as u32 + 1
-    };
-
-    // a * 10^(digits in b) + b
+    let b_digits = b.to_string().len() as u32;
     let multiplier = 10_i64.checked_pow(b_digits)?;
     a.checked_mul(multiplier)?.checked_add(b)
 }
