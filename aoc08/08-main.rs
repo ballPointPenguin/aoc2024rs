@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::fs::read_to_string;
 
 fn main() -> std::io::Result<()> {
@@ -12,8 +13,7 @@ fn main() -> std::io::Result<()> {
 
 pub fn count_antinodes(input: &str) -> usize {
     let antennas = parse_antennas(input);
-    let is_in_bounds = make_is_in_bounds(input);
-    let antinodes = find_all_antinodes(&antennas, is_in_bounds);
+    let antinodes = find_all_antinodes(&antennas);
     antinodes.len()
 }
 
@@ -41,6 +41,20 @@ fn parse_antennas(input: &str) -> AntennaMap {
     map
 }
 
+fn find_all_antinodes(antennas: &AntennaMap) -> AntinodeMap {
+    let mut map: AntinodeMap = HashMap::new();
+
+    for freq in antennas.keys() {
+        let pairs = pairings(antennas, *freq);
+        for (pos1, pos2) in pairs {
+            map.entry(pos1).or_default().push(*freq);
+            map.entry(pos2).or_default().push(*freq);
+        }
+    }
+
+    map
+}
+
 fn pairings(antennas: &AntennaMap, freq: char) -> Vec<(Position, Position)> {
     let positions = antennas.get(&freq).unwrap();
     let mut pairs: Vec<(Position, Position)> = Vec::new();
@@ -53,27 +67,7 @@ fn pairings(antennas: &AntennaMap, freq: char) -> Vec<(Position, Position)> {
     pairs
 }
 
-fn find_all_antinodes(
-    antennas: &AntennaMap,
-    is_in_bounds: impl Fn(Position) -> bool,
-) -> AntinodeMap {
-    let mut map: AntinodeMap = HashMap::new();
-
-    for freq in antennas.keys() {
-        let pairs = pairings(antennas, *freq);
-        for (pos1, pos2) in pairs {
-            for antinode in calculate_antinodes(pos1, pos2) {
-                if is_in_bounds(antinode) {
-                    map.entry(antinode).or_default().push(*freq);
-                }
-            }
-        }
-    }
-
-    map
-}
-
-fn calculate_antinodes(pos1: Position, pos2: Position) -> [Position; 2] {
+fn calculate_antinodes(pos1: Position, pos2: Position) -> (Position, Position) {
     let x_diff = (pos1.x - pos2.x).abs();
     let y_diff = (pos1.y - pos2.y).abs();
     let x_min = pos1.x.min(pos2.x) - x_diff;
@@ -83,27 +77,25 @@ fn calculate_antinodes(pos1: Position, pos2: Position) -> [Position; 2] {
 
     // x increases while y decreases or vice versa
     if (pos2.x > pos1.x) != (pos2.y > pos1.y) {
-        [
+        (
             Position { x: x_min, y: y_max },
             Position { x: x_max, y: y_min },
-        ]
+        )
     } else {
         // Default case covers:
         // - Both x and y increase/decrease together
-        // - Vertical lines [pos1.x == pos2.x]
-        // - Horizontal lines [pos1.y == pos2.y]
-        [
+        // - Vertical lines (pos1.x == pos2.x)
+        // - Horizontal lines (pos1.y == pos2.y)
+        (
             Position { x: x_min, y: y_min },
             Position { x: x_max, y: y_max },
-        ]
+        )
     }
 }
 
-fn make_is_in_bounds(input: &str) -> impl Fn(Position) -> bool {
-    let height = input.lines().count() as i8;
-    let width = input.lines().next().unwrap().len() as i8;
-
-    move |pos: Position| pos.x >= 0 && pos.y >= 0 && pos.x < width && pos.y < height
+// TODO: Needs to know the upper bounds of the grid
+fn is_in_bounds(pos: Position) -> bool {
+    pos.x >= 0 && pos.y >= 0
 }
 
 #[cfg(test)]
@@ -112,41 +104,41 @@ mod tests {
 
     #[test]
     fn test_calculate_antinodes() {
-        let result = calculate_antinodes(Position { x: 1, y: 2 }, Position { x: 2, y: 4 });
-        let expected = [Position { x: 0, y: 0 }, Position { x: 3, y: 6 }];
-        assert!(result.contains(&expected[0]) && result.contains(&expected[1]));
+        let (pos1, pos2) = calculate_antinodes(Position { x: 1, y: 2 }, Position { x: 2, y: 4 });
+        assert_eq!(pos1, Position { x: 0, y: 0 });
+        assert_eq!(pos2, Position { x: 3, y: 6 });
     }
 
     #[test]
     fn test_calculate_antinodes_inverted() {
         let result = calculate_antinodes(Position { x: 1, y: 4 }, Position { x: 2, y: 2 });
-        let expected = [Position { x: 0, y: 6 }, Position { x: 3, y: 0 }];
-        assert!(result.contains(&expected[0]) && result.contains(&expected[1]));
+        let expected = HashSet::from([Position { x: 0, y: 6 }, Position { x: 3, y: 0 }]);
+        assert_eq!(HashSet::from([result.0, result.1]), expected);
 
         let result = calculate_antinodes(Position { x: 2, y: 2 }, Position { x: 1, y: 4 });
-        let expected = [Position { x: 0, y: 6 }, Position { x: 3, y: 0 }];
-        assert!(result.contains(&expected[0]) && result.contains(&expected[1]));
+        let expected = HashSet::from([Position { x: 0, y: 6 }, Position { x: 3, y: 0 }]);
+        assert_eq!(HashSet::from([result.0, result.1]), expected);
     }
 
     #[test]
     fn test_calculate_antinodes_horizontal() {
         let result = calculate_antinodes(Position { x: 1, y: 2 }, Position { x: 2, y: 2 });
-        let expected = [Position { x: 0, y: 2 }, Position { x: 3, y: 2 }];
-        assert!(result.contains(&expected[0]) && result.contains(&expected[1]));
+        let expected = HashSet::from([Position { x: 0, y: 2 }, Position { x: 3, y: 2 }]);
+        assert_eq!(HashSet::from([result.0, result.1]), expected);
     }
 
     #[test]
     fn test_calculate_antinodes_vertical() {
         let result = calculate_antinodes(Position { x: 1, y: 2 }, Position { x: 1, y: 4 });
-        let expected = [Position { x: 1, y: 0 }, Position { x: 1, y: 6 }];
-        assert!(result.contains(&expected[0]) && result.contains(&expected[1]));
+        let expected = HashSet::from([Position { x: 1, y: 0 }, Position { x: 1, y: 6 }]);
+        assert_eq!(HashSet::from([result.0, result.1]), expected);
     }
 
     #[test]
     fn test_calulate_antinodes_negative() {
         let result = calculate_antinodes(Position { x: 0, y: 0 }, Position { x: 2, y: 2 });
-        let expected = [Position { x: -2, y: -2 }, Position { x: 4, y: 4 }];
-        assert!(result.contains(&expected[0]) && result.contains(&expected[1]));
+        let expected = HashSet::from([Position { x: -2, y: -2 }, Position { x: 4, y: 4 }]);
+        assert_eq!(HashSet::from([result.0, result.1]), expected);
     }
 
     const SAMPLE_INPUT: &str = "\
