@@ -1,12 +1,13 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::read_to_string;
 
 fn main() -> std::io::Result<()> {
     let input = read_to_string("./08-input.txt")?;
     let result = count_antinodes(&input);
+    let result2 = count_resonant_antinodes(&input);
 
     println!("Result: {}", result);
-
+    println!("Result 2: {}", result2);
     Ok(())
 }
 
@@ -17,6 +18,13 @@ pub fn count_antinodes(input: &str) -> usize {
     antinodes.len()
 }
 
+pub fn count_resonant_antinodes(input: &str) -> usize {
+    let antennas = parse_antennas(input);
+    let is_in_bounds = make_is_in_bounds(input);
+    let antinodes = find_resonant_antinodes(&antennas, is_in_bounds);
+    antinodes.len()
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct Position {
     x: i8,
@@ -24,7 +32,7 @@ struct Position {
 }
 
 type AntennaMap = HashMap<char, Vec<Position>>;
-type AntinodeMap = HashMap<Position, Vec<char>>;
+type Antinodes = HashSet<Position>;
 
 fn parse_antennas(input: &str) -> AntennaMap {
     let mut map: AntennaMap = HashMap::new();
@@ -53,24 +61,39 @@ fn pairings(antennas: &AntennaMap, freq: char) -> Vec<(Position, Position)> {
     pairs
 }
 
-fn find_all_antinodes(
-    antennas: &AntennaMap,
-    is_in_bounds: impl Fn(Position) -> bool,
-) -> AntinodeMap {
-    let mut map: AntinodeMap = HashMap::new();
+fn find_all_antinodes(antennas: &AntennaMap, is_in_bounds: impl Fn(Position) -> bool) -> Antinodes {
+    let mut antinodes: Antinodes = HashSet::new();
 
     for freq in antennas.keys() {
         let pairs = pairings(antennas, *freq);
         for (pos1, pos2) in pairs {
             for antinode in calculate_antinodes(pos1, pos2) {
                 if is_in_bounds(antinode) {
-                    map.entry(antinode).or_default().push(*freq);
+                    antinodes.insert(antinode);
                 }
             }
         }
     }
 
-    map
+    antinodes
+}
+
+fn find_resonant_antinodes(
+    antennas: &AntennaMap,
+    is_in_bounds: impl Fn(Position) -> bool,
+) -> Antinodes {
+    let mut antinodes: Antinodes = HashSet::new();
+
+    for freq in antennas.keys() {
+        let pairs = pairings(antennas, *freq);
+        for pair in pairs {
+            for antinode in calculate_resonant_antinodes(pair, &is_in_bounds) {
+                antinodes.insert(antinode);
+            }
+        }
+    }
+
+    antinodes
 }
 
 fn calculate_antinodes(pos1: Position, pos2: Position) -> [Position; 2] {
@@ -97,6 +120,49 @@ fn calculate_antinodes(pos1: Position, pos2: Position) -> [Position; 2] {
             Position { x: x_max, y: y_max },
         ]
     }
+}
+
+fn calculate_resonant_antinodes(
+    pair: (Position, Position),
+    is_in_bounds: impl Fn(Position) -> bool,
+) -> Vec<Position> {
+    let mut antinodes: Antinodes = HashSet::new();
+    let (pos1, pos2) = pair;
+
+    // Calculate direction vector and reduce to unit steps
+    let dx = pos2.x - pos1.x;
+    let dy = pos2.y - pos1.y;
+
+    // Helper to extend line using the pattern
+    let mut extend_line = |start: Position| {
+        let mut current = start;
+
+        while is_in_bounds(current) {
+            antinodes.insert(current);
+            current = Position {
+                x: current.x + dx,
+                y: current.y + dy,
+            };
+        }
+
+        // And the other direction
+        current = Position {
+            x: start.x - dx,
+            y: start.y - dy,
+        };
+
+        while is_in_bounds(current) {
+            antinodes.insert(current);
+            current = Position {
+                x: current.x - dx,
+                y: current.y - dy,
+            };
+        }
+    };
+
+    extend_line(pos1);
+
+    antinodes.into_iter().collect()
 }
 
 fn make_is_in_bounds(input: &str) -> impl Fn(Position) -> bool {
@@ -260,5 +326,56 @@ mod tests {
 ..A..";
         // Antinodes may occur at locations that contain antennas
         assert_eq!(count_antinodes(input), 2);
+    }
+
+    #[test]
+    fn test_resonant_antinodes_simple_line() {
+        let input = "\
+.....
+..T..
+..T..
+..T..
+.....";
+        // All three T's are collinear and should be antinodes
+        // Plus two more antinodes at the ends of the line
+        assert_eq!(count_resonant_antinodes(input), 5);
+    }
+
+    #[test]
+    fn test_resonant_antinodes_diagonal() {
+        let input = "\
+T....
+.T...
+..T..
+.....
+.....";
+        // Three T's are collinear diagonally
+        // Plus two more antinodes extending the line
+        assert_eq!(count_resonant_antinodes(input), 5);
+    }
+
+    #[test]
+    fn test_resonant_antinodes_multiple_lines() {
+        let input = "\
+T.........
+...T......
+.T........
+..........
+..........
+..........
+..........
+..........
+..........
+..........";
+        // Forms both vertical and horizontal lines through center T
+        // Should create antinodes at all T positions plus the ends
+        // of both lines (being careful not to double-count)
+        assert_eq!(count_resonant_antinodes(input), 9);
+    }
+
+    #[test]
+    fn test_resonant_sample_input() {
+        // From the problem description
+        assert_eq!(count_resonant_antinodes(SAMPLE_INPUT), 34);
     }
 }
