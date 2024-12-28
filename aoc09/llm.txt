@@ -1,0 +1,22 @@
+Advent of Code Day 9
+
+Please find 09-text.md in the project files for a description of today's puzzle.
+
+We're working through the daily "Advent of Code" puzzles, using Rust.
+Previous days puzzles and my rust implementations are now in this project as well, so feel free to catch up on where we've been the last few days, and how my Rust programming is coming along.
+
+Today, things are starting to heat up! The whole puzzle is going to be manipulating a linear sequence of digits. I'm not sure what, if any, "Classical Computer Science" problems or algorithms might be related to this problem. But I'd be interested to hear about them. It's not quite Towers of Hanoi. Actually, the "file-compacting" in this puzzle is pretty simple since the "files" to be moved do not need to stick together. We simply move each digit to the left-most empty spot, in order. (I could see this rule getting complicated in Part 2 maybe.)
+
+And, for what it's worth, we can try to anticipate that in Part 2, the puzzle author usually throws a curveball at us with the tendency to break the assumptions we've made in Part 1. Flexiable abstractions are often rewarded.
+
+Note: my puzzle input data is one line of 20,000 digits 0-9. We may be cautious about integer types and overflows.
+
+Part 2 Update:
+
+Part 1 was completed (see 09-main.rs for my implementation).
+Part 2 instructions are included in 09b-text.md.
+
+We are now instructed to move whole files instead of simply moving sigle-digit "blocks".
+Only the `compact_disk` function needs to change for this. I'd like to preserve that for Part 1, and create a new `compact_disk_files` function for Part 2.
+
+How might that look?
