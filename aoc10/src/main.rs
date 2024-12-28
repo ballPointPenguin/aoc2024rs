@@ -1,12 +1,14 @@
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs::read_to_string;
 
 fn main() -> std::io::Result<()> {
     let input = read_to_string("./10-input.txt")?;
 
     let result = sum_trailhead_scores(&input);
+    let result2 = sum_unique_trailhead_scores(&input);
 
     println!("Result: {}", result);
+    println!("Result2: {}", result2);
 
     Ok(())
 }
@@ -18,6 +20,21 @@ pub fn sum_trailhead_scores(input: &str) -> usize {
     start_positions
         .into_iter()
         .map(|start| grid.find_reachable_nines(start).len())
+        .sum()
+}
+
+pub fn sum_unique_trailhead_scores(input: &str) -> usize {
+    let grid = parse_grid(input);
+    let start_positions = grid.get_start_positions();
+
+    start_positions
+        .into_iter()
+        .map(|start| {
+            grid.find_valid_paths(start)
+                .values()
+                .map(|paths| paths.len())
+                .sum::<usize>()
+        })
         .sum()
 }
 
@@ -123,6 +140,50 @@ impl Grid {
 
         reachable_nines
     }
+
+    fn find_valid_paths(&self, start: Position) -> HashMap<Position, HashSet<Vec<Position>>> {
+        // First find all reachable nines from this start
+        let reachable_nines = self.find_reachable_nines(start);
+
+        let mut paths_by_end = HashMap::new();
+        for end in reachable_nines {
+            let mut paths = HashSet::new();
+            let mut current_path = vec![start];
+            self.dfs_paths(start, end, &mut current_path, &mut paths);
+            paths_by_end.insert(end, paths);
+        }
+
+        paths_by_end
+    }
+
+    fn dfs_paths(
+        &self,
+        current: Position,
+        target: Position,
+        path: &mut Vec<Position>,
+        paths: &mut HashSet<Vec<Position>>,
+    ) {
+        // If we've taken too many steps, backtrack
+        if path.len() > 10 {
+            return;
+        }
+
+        // If we've reached a 9 and it's our target, check if path is valid length
+        if current == target && self.cells[current.y][current.x] == 9 {
+            if path.len() == 10 {
+                paths.insert(path.clone());
+            }
+            return;
+        }
+
+        // Try each valid next position
+        let next_positions = self.get_valid_next_positions(current);
+        for next in next_positions {
+            path.push(next);
+            self.dfs_paths(next, target, path, paths);
+            path.pop();
+        }
+    }
 }
 
 #[cfg(test)]
@@ -182,6 +243,82 @@ mod tests {
 901
 890";
             assert_eq!(sum_trailhead_scores(&input), 0); // No valid paths possible
+        }
+    }
+
+    mod sum_unique_trailhead_scores {
+        use super::*;
+
+        #[test]
+        // .....0.
+        // ..4321.
+        // ..5..2.
+        // ..6543.
+        // ..7..4.
+        // ..8765.
+        // ..9....
+        fn single_trailhead_single_peak() {
+            let input = "\
+1111808
+1143211
+1151121
+1165431
+1171141
+1187651
+1191111";
+            assert_eq!(sum_unique_trailhead_scores(&input), 3);
+        }
+
+        #[test]
+        // ..90..9
+        // ...1.98
+        // ...2..7
+        // 6543456
+        // 765.987
+        // 876....
+        // 987....
+        fn single_trailhead_multiple_peaks() {
+            let input = "\
+1190819
+1111198
+1112117
+6543456
+7651987
+8761111
+9871111";
+            assert_eq!(sum_unique_trailhead_scores(&input), 13);
+        }
+
+        #[test]
+        // 012345
+        // 123456
+        // 234567
+        // 345678
+        // 4.6789
+        // 56789.
+        fn single_tailhead_max_paths() {
+            let input = "\
+012345
+123456
+234567
+345678
+416789
+567891";
+            assert_eq!(sum_unique_trailhead_scores(&input), 227);
+        }
+
+        #[test]
+        fn many_trailheads_many_peaks() {
+            let input = "\
+89010123
+78121874
+87430965
+96549874
+45678903
+32019012
+01329801
+10456732";
+            assert_eq!(sum_unique_trailhead_scores(&input), 81);
         }
     }
 }
