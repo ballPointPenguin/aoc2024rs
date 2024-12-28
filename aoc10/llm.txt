@@ -1,0 +1,18 @@
+Advent of Code Day 10
+
+Please find 10-text.md in the project files for a description of today's puzzle.
+
+We're working through the daily "Advent of Code" puzzles, using Rust.
+Previous days puzzles and my rust implementations are now in this project as well, so feel free to catch up on where we've been the last few days, and how my Rust programming is coming along.
+
+Today the input data is another "2D Grid" of digits 0-9.
+
+This is some kind of "pathfinding" puzzle, with multiple paths (or no paths) possible for any potential starting point (denoted as 0). Can you relate any CompSci lore or familiar algorithms or classical problems to today's challenge?
+
+We should consider how to represent the input data in a way that is easy to work with. Consider that in our calculated representation, a "cell" in the grid may need to contain more than one datum.
+
+And, for what it's worth, we can try to anticipate that in Part 2, the puzzle author usually throws a curveball at us with the tendency to break the assumptions we've made in Part 1. Flexiable abstractions are often rewarded.
+
+After we've decided how to represent the input data, can you generate a few unit tests for some yet unwritten primary function that will accept some inputs and return an integer?
+
+(Note: I've glanced at my puzzle input data and it's a 40x40 grid of digits).
