@@ -1,5 +1,8 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use rayon::prelude::*;
+use rustc_hash::{FxHashMap, FxHashSet};
+use std::collections::VecDeque;
 use std::fs::read_to_string;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 fn main() -> std::io::Result<()> {
@@ -76,15 +79,10 @@ struct Position {
 }
 
 struct Grid {
-    cells: Vec<Vec<u8>>,
+    cells: Vec<u8>,
     width: usize,
     height: usize,
-}
-
-#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
-enum Direction {
-    Horizontal,
-    Vertical,
+    neighbors_cache: Vec<Vec<Vec<Position>>>,
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
@@ -98,28 +96,44 @@ enum EdgeType {
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 struct Edge {
     start: Position,
-    direction: Direction,
     edge_type: EdgeType,
     is_inner: bool,
 }
 
 impl Grid {
-    fn new(cells: Vec<Vec<u8>>) -> Self {
+    fn new(input: Vec<Vec<u8>>) -> Self {
+        let height = input.len();
+        let width = input[0].len();
+        let cells = input.into_iter().flatten().collect();
+        let mut neighbors_cache = vec![vec![Vec::with_capacity(4); width]; height];
+
+        for y in 0..height {
+            for x in 0..width {
+                let pos = Position { x, y };
+                neighbors_cache[y][x] = get_neighbors_uncached(width, height, pos);
+            }
+        }
+
         Self {
-            cells: cells.clone(),
-            width: cells[0].len(),
-            height: cells.len(),
+            height,
+            width,
+            cells,
+            neighbors_cache,
         }
     }
 
-    fn get_cell(&self, pos: Position) -> u8 {
-        self.cells[pos.y][pos.x]
+    fn get_neighbors(&self, pos: Position) -> &[Position] {
+        &self.neighbors_cache[pos.y][pos.x]
     }
 
-    fn calculate_perimeter(&self, region: &HashSet<Position>) -> usize {
+    fn get_cell(&self, pos: Position) -> u8 {
+        self.cells[pos.y * self.width + pos.x]
+    }
+
+    fn calculate_perimeter(&self, region: &FxHashSet<Position>) -> usize {
         let mut perimeter = 0;
         for &pos in region {
-            let neighbors = get_neighbors(self, pos);
+            let neighbors = self.get_neighbors(pos);
 
             // Grid boundaries = 4 - neighbors.len()
             perimeter += 4 - neighbors.len();
@@ -135,32 +149,16 @@ impl Grid {
         perimeter
     }
 
-    fn calculate_sides(&self, region: &HashSet<Position>) -> usize {
+    fn calculate_sides(&self, region: &FxHashSet<Position>) -> usize {
         let edges = self.collect_edges(region);
-        // Count unique sides
-        // Edges with same direction and adjacent positions should count as 1 side
 
-        // Group edges by edge_type and inner/outer
-        let mut top_inner = Vec::new();
-        let mut top_outer = Vec::new();
-        let mut bottom_inner = Vec::new();
-        let mut bottom_outer = Vec::new();
-        let mut left_inner = Vec::new();
-        let mut left_outer = Vec::new();
-        let mut right_inner = Vec::new();
-        let mut right_outer = Vec::new();
-
+        // Group edges by edge_type and inner/outer state using a HashMap
+        let mut edge_groups: FxHashMap<(EdgeType, bool), Vec<Edge>> = FxHashMap::default();
         for edge in edges {
-            match (edge.edge_type, edge.is_inner) {
-                (EdgeType::Top, true) => top_inner.push(edge),
-                (EdgeType::Top, false) => top_outer.push(edge),
-                (EdgeType::Bottom, true) => bottom_inner.push(edge),
-                (EdgeType::Bottom, false) => bottom_outer.push(edge),
-                (EdgeType::Left, true) => left_inner.push(edge),
-                (EdgeType::Left, false) => left_outer.push(edge),
-                (EdgeType::Right, true) => right_inner.push(edge),
-                (EdgeType::Right, false) => right_outer.push(edge),
-            }
+            edge_groups
+                .entry((edge.edge_type, edge.is_inner))
+                .or_default()
+                .push(edge);
         }
 
         // Helper function to count sides in a group of edges
@@ -169,123 +167,93 @@ impl Grid {
                 return 0;
             }
 
-            // Group by row/column first
-            let mut by_line: HashMap<usize, Vec<Edge>> = HashMap::new();
-            for edge in edges {
-                let key = match edge.edge_type {
-                    EdgeType::Top | EdgeType::Bottom => edge.start.y,
-                    EdgeType::Left | EdgeType::Right => edge.start.x,
-                };
-                by_line.entry(key).or_default().push(*edge);
-            }
+            // Determine if we're dealing with horizontal or vertical edges
+            let is_horizontal = matches!(edges[0].edge_type, EdgeType::Top | EdgeType::Bottom);
 
-            // For each line, count continuous segments
+            // Group edges by their fixed coordinate (y for horizontal, x for vertical)
+            let by_line: FxHashMap<usize, Vec<&Edge>> =
+                edges.iter().fold(FxHashMap::default(), |mut acc, edge| {
+                    let key = if is_horizontal {
+                        edge.start.y
+                    } else {
+                        edge.start.x
+                    };
+                    acc.entry(key).or_default().push(edge);
+                    acc
+                });
+
             by_line
                 .values()
                 .map(|line_edges| {
                     let mut sorted_edges = line_edges.to_vec();
-                    sorted_edges.sort_by_key(|e| match e.edge_type {
-                        EdgeType::Top | EdgeType::Bottom => e.start.x,
-                        EdgeType::Left | EdgeType::Right => e.start.y,
-                    });
+                    // Sort by the varying coordinate (x for horizontal, y for vertical)
+                    sorted_edges.sort_by_key(|e| if is_horizontal { e.start.x } else { e.start.y });
 
-                    let mut segments = 1;
-                    for window in sorted_edges.windows(2) {
-                        let pos1 = match window[0].edge_type {
-                            EdgeType::Top | EdgeType::Bottom => window[0].start.x,
-                            EdgeType::Left | EdgeType::Right => window[0].start.y,
-                        };
-                        let pos2 = match window[1].edge_type {
-                            EdgeType::Top | EdgeType::Bottom => window[1].start.x,
-                            EdgeType::Left | EdgeType::Right => window[1].start.y,
-                        };
+                    // Count segments using windows
+                    1 + sorted_edges
+                        .windows(2)
+                        .filter(|window| {
+                            let [e1, e2] = window else { unreachable!() };
+                            let (pos1, pos2) = if is_horizontal {
+                                (e1.start.x, e2.start.x)
+                            } else {
+                                (e1.start.y, e2.start.y)
+                            };
 
-                        // If positiions aren't adjacent or y-coords differ (for vertical)
-                        // or x-coords differ (for horizontal), count as new segment
-                        if pos1.abs_diff(pos2) > 1
-                            || (matches!(window[0].edge_type, EdgeType::Left | EdgeType::Right)
-                                && window[0].start.x != window[1].start.x)
-                            || (matches!(window[0].edge_type, EdgeType::Top | EdgeType::Bottom)
-                                && window[0].start.y != window[1].start.y)
-                        {
-                            segments += 1;
-                        }
-                    }
-                    segments
+                            pos1.abs_diff(pos2) > 1
+                                || (is_horizontal && e1.start.y != e2.start.y)
+                                || (!is_horizontal && e1.start.x != e2.start.x)
+                        })
+                        .count()
                 })
                 .sum()
         }
 
-        let ti_sides = count_sides(&top_inner);
-        let to_sides = count_sides(&top_outer);
-        let bi_sides = count_sides(&bottom_inner);
-        let bo_sides = count_sides(&bottom_outer);
-        let li_sides = count_sides(&left_inner);
-        let lo_sides = count_sides(&left_outer);
-        let ri_sides = count_sides(&right_inner);
-        let ro_sides = count_sides(&right_outer);
-
-        ti_sides + to_sides + bi_sides + bo_sides + li_sides + lo_sides + ri_sides + ro_sides
+        // Calculate sides for all edge groups and sum them
+        edge_groups.values().map(|edges| count_sides(edges)).sum()
     }
 
-    fn collect_edges(&self, region: &HashSet<Position>) -> HashSet<Edge> {
-        // For each position in the region:
-        // - Check its neighbors
-        // - For each missing neighbor (boundary):
-        //   - create Edge with appropriate direction
-        let mut edges = HashSet::new();
+    fn collect_edges(&self, region: &FxHashSet<Position>) -> FxHashSet<Edge> {
+        type PosCompare = fn(&Position, &Position) -> bool;
 
-        for &pos in region {
-            let neighbors = get_neighbors(self, pos);
+        let edge_checks: [(EdgeType, PosCompare); 4] = [
+            (EdgeType::Top, |n, p| n.y < p.y),
+            (EdgeType::Bottom, |n, p| n.y > p.y),
+            (EdgeType::Left, |n, p| n.x < p.x),
+            (EdgeType::Right, |n, p| n.x > p.x),
+        ];
 
-            // For each possible direction:
-            // Top edge
-            if !neighbors.iter().any(|n| n.y < pos.y && region.contains(n)) {
-                edges.insert(Edge {
-                    start: pos,
-                    direction: Direction::Horizontal,
-                    edge_type: EdgeType::Top,
-                    is_inner: neighbors.iter().any(|n| n.y < pos.y),
-                });
-            }
-            // Bottom edge
-            if !neighbors.iter().any(|n| n.y > pos.y && region.contains(n)) {
-                edges.insert(Edge {
-                    start: pos,
-                    direction: Direction::Horizontal,
-                    edge_type: EdgeType::Bottom,
-                    is_inner: neighbors.iter().any(|n| n.y > pos.y),
-                });
-            }
-            // Left edge
-            if !neighbors.iter().any(|n| n.x < pos.x && region.contains(n)) {
-                edges.insert(Edge {
-                    start: pos,
-                    direction: Direction::Vertical,
-                    edge_type: EdgeType::Left,
-                    is_inner: neighbors.iter().any(|n| n.x < pos.x),
-                });
-            }
-            // Right edge
-            if !neighbors.iter().any(|n| n.x > pos.x && region.contains(n)) {
-                edges.insert(Edge {
-                    start: pos,
-                    direction: Direction::Vertical,
-                    edge_type: EdgeType::Right,
-                    is_inner: neighbors.iter().any(|n| n.x > pos.x),
-                });
-            }
-        }
-        edges
+        region
+            .iter()
+            .flat_map(|&pos| {
+                let neighbors = self.get_neighbors(pos);
+
+                edge_checks.iter().filter_map(move |&(edge_type, check)| {
+                    // If no neighbor in this direction is part of the region
+                    if !neighbors
+                        .iter()
+                        .any(|n| check(n, &pos) && region.contains(n))
+                    {
+                        Some(Edge {
+                            start: pos,
+                            edge_type,
+                            // But if there is a neighbor in this direction (even outside region)
+                            is_inner: neighbors.iter().any(|n| check(n, &pos)),
+                        })
+                    } else {
+                        None
+                    }
+                })
+            })
+            .collect()
     }
 }
 
-fn find_region(grid: &Grid, start: Position) -> HashSet<Position> {
-    let find_region_start = Instant::now();
-    // Do a flood fill to find all connected (horizontal or vertical) cells of the same type
-    let mut region = HashSet::new();
+fn find_region(grid: &Grid, start: Position) -> FxHashSet<Position> {
+    let mut region =
+        FxHashSet::with_capacity_and_hasher(grid.width * grid.height / 4, Default::default());
     let mut visited = vec![vec![false; grid.width]; grid.height];
-    let mut queue = VecDeque::new();
+    let mut queue = VecDeque::with_capacity(grid.width.max(grid.height));
 
     let value = grid.get_cell(start);
     queue.push_back(start);
@@ -293,37 +261,24 @@ fn find_region(grid: &Grid, start: Position) -> HashSet<Position> {
     region.insert(start);
 
     while let Some(current) = queue.pop_front() {
-        for neighbor in get_neighbors(grid, current) {
-            if !visited[neighbor.y][neighbor.x] && grid.get_cell(neighbor) == value {
+        for neighbor in grid.get_neighbors(current) {
+            if !visited[neighbor.y][neighbor.x] && grid.get_cell(*neighbor) == value {
                 visited[neighbor.y][neighbor.x] = true;
-                region.insert(neighbor);
-                queue.push_back(neighbor);
+                region.insert(*neighbor);
+                queue.push_back(*neighbor);
             }
         }
-    }
-
-    let find_region_end = Instant::now();
-    let duration = find_region_end.duration_since(find_region_start);
-    if duration.as_secs() > 1 {
-        println!(
-            "Time taken to find region for {}: {:?}",
-            value as char, duration
-        );
     }
 
     region
 }
 
-fn get_neighbors(grid: &Grid, pos: Position) -> Vec<Position> {
-    let mut neighbors = Vec::new();
-
-    // Check all 4 cardinal directions
-    let deltas = [(0, -1), (0, 1), (-1, 0), (1, 0)];
-
-    for (dx, dy) in deltas {
+fn get_neighbors_uncached(width: usize, height: usize, pos: Position) -> Vec<Position> {
+    let mut neighbors = Vec::with_capacity(4);
+    for (dx, dy) in [(0, -1), (0, 1), (-1, 0), (1, 0)] {
         let new_x = pos.x as i32 + dx;
         let new_y = pos.y as i32 + dy;
-        if new_x >= 0 && new_x < grid.width as i32 && new_y >= 0 && new_y < grid.height as i32 {
+        if new_x >= 0 && new_x < width as i32 && new_y >= 0 && new_y < height as i32 {
             neighbors.push(Position {
                 x: new_x as usize,
                 y: new_y as usize,
@@ -333,26 +288,39 @@ fn get_neighbors(grid: &Grid, pos: Position) -> Vec<Position> {
     neighbors
 }
 
-fn find_all_regions(grid: &Grid) -> Vec<HashSet<Position>> {
-    let mut regions = Vec::new();
-    let mut visited = HashSet::new();
-    for y in 0..grid.height {
-        for x in 0..grid.width {
-            let pos = Position { x, y };
-            if visited.contains(&pos) {
-                continue;
+fn find_all_regions(grid: &Grid) -> Vec<FxHashSet<Position>> {
+    let visited: Arc<Mutex<FxHashSet<Position>>> = Arc::new(Mutex::new(FxHashSet::default()));
+    let positions: Vec<_> = (0..grid.height)
+        .flat_map(|y| (0..grid.width).map(move |x| Position { x, y }))
+        .collect();
+
+    positions
+        .par_iter()
+        .filter_map(|&pos| {
+            let mut visited = visited.lock().unwrap();
+            if !visited.contains(&pos) {
+                let region = find_region(grid, pos);
+                visited.extend(&region);
+                Some(region)
+            } else {
+                None
             }
-            let region = find_region(grid, pos);
-            regions.push(region.clone());
-            visited.extend(region);
-        }
-    }
-    regions
+        })
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rayon::ThreadPoolBuilder;
+
+    fn with_fixed_threads<T: Send>(test: impl FnOnce() -> T + Send) -> T {
+        let pool = ThreadPoolBuilder::new()
+            .num_threads(2) // Or any fixed number
+            .build()
+            .unwrap();
+        pool.install(test)
+    }
 
     mod collect_edges {
         use super::*;
@@ -439,37 +407,41 @@ AAAA",
 
         #[test]
         fn multiple_regions() {
-            let grid = Grid::new(parse_input(
-                "\
+            with_fixed_threads(|| {
+                let grid = Grid::new(parse_input(
+                    "\
 AAAA
 BBCD
 BBCC
 EEEC",
-            ));
-            let regions = find_all_regions(&grid);
-            assert_eq!(grid.calculate_perimeter(&regions[0]), 10); // A
-            assert_eq!(grid.calculate_perimeter(&regions[1]), 8); // B
-            assert_eq!(grid.calculate_perimeter(&regions[2]), 10); // C
-            assert_eq!(grid.calculate_perimeter(&regions[3]), 4); // D
-            assert_eq!(grid.calculate_perimeter(&regions[4]), 8); // E
+                ));
+                let regions = find_all_regions(&grid);
+                assert_eq!(grid.calculate_perimeter(&regions[0]), 10); // A
+                assert_eq!(grid.calculate_perimeter(&regions[1]), 8); // B
+                assert_eq!(grid.calculate_perimeter(&regions[2]), 10); // C
+                assert_eq!(grid.calculate_perimeter(&regions[3]), 4); // D
+                assert_eq!(grid.calculate_perimeter(&regions[4]), 8); // E
+            });
         }
 
         #[test]
         fn region_with_holes() {
-            let grid = Grid::new(parse_input(
-                "\
+            with_fixed_threads(|| {
+                let grid = Grid::new(parse_input(
+                    "\
 OOOOO
 OXOXO
 OOOOO
 OXOXO
 OOOOO",
-            ));
-            let regions = find_all_regions(&grid);
-            assert_eq!(grid.calculate_perimeter(&regions[0]), 36); // O
-            assert_eq!(grid.calculate_perimeter(&regions[1]), 4); // X1
-            assert_eq!(grid.calculate_perimeter(&regions[2]), 4); // X2
-            assert_eq!(grid.calculate_perimeter(&regions[3]), 4); // X3
-            assert_eq!(grid.calculate_perimeter(&regions[4]), 4); // X4
+                ));
+                let regions = find_all_regions(&grid);
+                assert_eq!(grid.calculate_perimeter(&regions[0]), 36); // O
+                assert_eq!(grid.calculate_perimeter(&regions[1]), 4); // X1
+                assert_eq!(grid.calculate_perimeter(&regions[2]), 4); // X2
+                assert_eq!(grid.calculate_perimeter(&regions[3]), 4); // X3
+                assert_eq!(grid.calculate_perimeter(&regions[4]), 4); // X4
+            });
         }
     }
 
