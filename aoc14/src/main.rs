@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::fs::read_to_string;
 use std::time::Instant;
 
@@ -19,6 +18,8 @@ fn main() -> std::io::Result<()> {
     let end_2 = Instant::now();
     println!("Time taken (Part 2): {:?}", end_2.duration_since(end));
 
+    println!("{}", render_grid(&robots, 101, 103, result_2 as i32));
+
     Ok(())
 }
 
@@ -27,7 +28,7 @@ fn parse_input(input: &str) -> Vec<Robot> {
         .lines()
         .map(|line| {
             // Extract all numbers from the line, including negative signs
-            let nums: Vec<i16> = line
+            let nums: Vec<i32> = line
                 .split(&[',', ' ', '=', 'p', 'v'][..]) // split on any of these chars
                 .filter_map(|s| s.parse().ok()) // keep only the parseable numbers
                 .collect();
@@ -37,7 +38,30 @@ fn parse_input(input: &str) -> Vec<Robot> {
         .collect()
 }
 
-fn calculate_safety_factor(input: &str, width: i16, height: i16, seconds: i16) -> u64 {
+fn render_grid(robots: &[Robot], width: i32, height: i32, seconds: i32) -> String {
+    let mut grid = vec![vec!['.'; width as usize]; height as usize];
+
+    for robot in robots {
+        let pos = robot.position_at(seconds, width, height);
+        grid[pos.y as usize][pos.x as usize] = '🎄';
+    }
+
+    grid.iter()
+        .map(|row| {
+            row.iter()
+                .map(|&c| match c {
+                    '.' => format!("\x1b[0m."),
+                    '🎄' => format!("\x1b[32m🎄"),
+                    _ => unreachable!(),
+                })
+                .collect::<String>()
+                + "\x1b[0m"
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn calculate_safety_factor(input: &str, width: i32, height: i32, seconds: i32) -> u64 {
     let robots = parse_input(input);
     let positions: Vec<Position> = robots
         .iter()
@@ -48,14 +72,14 @@ fn calculate_safety_factor(input: &str, width: i16, height: i16, seconds: i16) -
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Position {
-    x: i16,
-    y: i16,
+    x: i32,
+    y: i32,
 }
 
 #[derive(Debug, Clone, Copy)]
 struct Velocity {
-    x: i16,
-    y: i16,
+    x: i32,
+    y: i32,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -65,14 +89,14 @@ struct Robot {
 }
 
 impl Robot {
-    fn new(px: i16, py: i16, vx: i16, vy: i16) -> Self {
+    fn new(px: i32, py: i32, vx: i32, vy: i32) -> Self {
         Self {
             p: Position { x: px, y: py },
             v: Velocity { x: vx, y: vy },
         }
     }
 
-    fn position_at(&self, seconds: i16, width: i16, height: i16) -> Position {
+    fn position_at(&self, seconds: i32, width: i32, height: i32) -> Position {
         // Calculate total movement
         let dx = self.v.x * seconds;
         let dy = self.v.y * seconds;
@@ -92,7 +116,7 @@ impl Robot {
     }
 }
 
-fn count_quadrants(positions: &[Position], width: i16, height: i16) -> [u64; 4] {
+fn count_quadrants(positions: &[Position], width: i32, height: i32) -> [u64; 4] {
     let mid_x = width / 2;
     let mid_y = height / 2;
 
@@ -110,18 +134,16 @@ fn count_quadrants(positions: &[Position], width: i16, height: i16) -> [u64; 4] 
     })
 }
 
-fn find_pattern_time(robots: &[Robot], width: i16, height: i16) -> i64 {
+fn find_pattern_time(robots: &[Robot], width: i32, height: i32) -> i32 {
     // Calculate x-entropy for all positions in width cycle
     let x_entropies: Vec<f64> = (0..width)
         .map(|t| {
-            let x_positions: Vec<i16> = robots
-                .iter()
-                .map(|r| {
-                    let pos = r.position_at(t, width, height);
-                    pos.x
-                })
-                .collect();
-            measure_entropy(&x_positions)
+            measure_entropy(
+                &robots
+                    .iter()
+                    .map(|r| r.position_at(t, width, height).x)
+                    .collect::<Vec<_>>(),
+            )
         })
         .collect();
 
@@ -130,11 +152,12 @@ fn find_pattern_time(robots: &[Robot], width: i16, height: i16) -> i64 {
     // Calculate y-entropy for all positions in height cycle
     let y_entropies: Vec<f64> = (0..height)
         .map(|t| {
-            let y_positions: Vec<i16> = robots
-                .iter()
-                .map(|r| r.position_at(t, width, height).y)
-                .collect();
-            measure_entropy(&y_positions)
+            measure_entropy(
+                &robots
+                    .iter()
+                    .map(|r| r.position_at(t, width, height).y)
+                    .collect::<Vec<_>>(),
+            )
         })
         .collect();
 
@@ -143,47 +166,38 @@ fn find_pattern_time(robots: &[Robot], width: i16, height: i16) -> i64 {
     chinese_reindeer(best_x_time, best_y_time, width, height)
 }
 
-fn best_time(entropies: &[f64]) -> i16 {
-    let mean = entropies.iter().sum::<f64>() / entropies.len() as f64;
-    let std_dev =
-        (entropies.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / entropies.len() as f64).sqrt();
-
+fn best_time(entropies: &[f64]) -> i32 {
     entropies
         .iter()
         .enumerate()
-        .min_by(|(_, a), (_, b)| {
-            let a_zscore = (*a - mean) / std_dev;
-            let b_zscore = (*b - mean) / std_dev;
-            a_zscore.partial_cmp(&b_zscore).unwrap()
-        })
-        .map(|(t, _)| t as i16)
+        .min_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
+        .map(|(t, _)| t as i32)
         .unwrap()
 }
 
-fn measure_entropy(positions: &[i16]) -> f64 {
+fn measure_entropy(positions: &[i32]) -> f64 {
     // Count frequencies of coordinates
-    let mut counts: HashMap<i16, usize> = HashMap::new();
+    let mut counts = vec![0; 256];
 
-    for pos in positions {
-        *counts.entry(*pos).or_default() += 1;
+    for &pos in positions {
+        counts[pos as usize] += 1;
     }
 
     // Calculate entropy - lower means more orderly
-    let entropy = counts
-        .values()
+    counts
+        .iter()
+        .filter(|&&count| count > 0)
         .map(|&count| {
             let p = count as f64 / positions.len() as f64;
             -p * p.ln()
         })
-        .sum::<f64>();
-
-    entropy
+        .sum()
 }
 
 // Chinese Remainder Theorem
-fn chinese_reindeer(a1: i16, a2: i16, n1: i16, n2: i16) -> i64 {
+fn chinese_reindeer(a1: i32, a2: i32, n1: i32, n2: i32) -> i32 {
     // Extended Euclidean Algorithm to find Bézout's coefficients
-    fn extended_gcd(a: i64, b: i64) -> (i64, i64, i64) {
+    fn extended_gcd(a: i32, b: i32) -> (i32, i32, i32) {
         if b == 0 {
             (a, 1, 0)
         } else {
@@ -193,11 +207,11 @@ fn chinese_reindeer(a1: i16, a2: i16, n1: i16, n2: i16) -> i64 {
     }
 
     // Find modular multiplicative inverse
-    let (_, m1, m2) = extended_gcd(n1 as i64, n2 as i64);
+    let (_, m1, m2) = extended_gcd(n1, n2);
 
     // Calculate result using Chinese Remainder Theorem formula
-    let mut result = a1 as i64 * m2 * n2 as i64 + a2 as i64 * m1 * n1 as i64;
-    let n = n1 as i64 * n2 as i64;
+    let mut result = a1 * m2 * n2 + a2 * m1 * n1;
+    let n = n1 * n2;
 
     // Normalize result to smallest positive number
     result = ((result % n) + n) % n;
