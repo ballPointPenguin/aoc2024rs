@@ -2,7 +2,7 @@ use std::collections::{HashSet, VecDeque};
 use std::fmt;
 use std::fs;
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Default)]
 struct Position {
     x: usize,
     y: usize,
@@ -24,6 +24,12 @@ struct Box {
 
 impl Box {
     fn new(left: Position, right: Position) -> Self {
+        assert_eq!(left.y, right.y, "Box positions must be on same row");
+        assert_eq!(
+            left.x + 1,
+            right.x,
+            "Box positions must be horizontally adjacent"
+        );
         Self { left, right }
     }
 
@@ -32,7 +38,7 @@ impl Box {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 enum Tile {
     Empty,
     Wall,
@@ -57,7 +63,7 @@ impl fmt::Display for Tile {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 enum Move {
     Up,
     Down,
@@ -65,7 +71,18 @@ enum Move {
     Right,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+impl Move {
+    fn deltas(&self) -> (isize, isize) {
+        match self {
+            Move::Left => (-1, 0),
+            Move::Right => (1, 0),
+            Move::Up => (0, -1),
+            Move::Down => (0, 1),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 struct Warehouse {
     width: usize,
     height: usize,
@@ -81,7 +98,7 @@ impl Warehouse {
             height: grid.len(),
             walls: HashSet::new(),
             boxes: HashSet::new(),
-            robot: Position { x: 0, y: 0 },
+            robot: Position::default(),
         };
 
         for (r, row) in grid.iter().enumerate() {
@@ -163,240 +180,228 @@ impl Warehouse {
             .find(|bx| bx.left == *pos || bx.right == *pos)
             .copied()
     }
-}
 
-fn make_moves(warehouse: &mut Warehouse, moves: &Vec<Move>) {
-    for dir in moves {
-        try_move(warehouse, *dir);
-    }
-}
-
-fn try_move(warehouse: &mut Warehouse, dir: Move) {
-    match dir {
-        Move::Up | Move::Down => try_move_vert(warehouse, dir),
-        Move::Left | Move::Right => try_move_horiz(warehouse, dir),
-    }
-}
-
-fn try_move_vert(warehouse: &mut Warehouse, dir: Move) {
-    let (dx, dy) = deltas(&dir);
-
-    let Some(next_pos) = warehouse.robot.shifted(dx, dy) else {
-        return;
-    };
-
-    let result = explore_vertical_push(warehouse, next_pos, dy);
-    match result {
-        None => {} // Blocked. Do nothing
-        Some(visited) => {
-            let sorted_boxes = sorted_boxes(&visited, dir);
-            for bx in sorted_boxes {
-                move_box(warehouse, bx, dx, dy);
-            }
-            warehouse.robot = next_pos;
-        }
-    }
-}
-
-fn sorted_boxes(boxes: &HashSet<Box>, dir: Move) -> Vec<Box> {
-    let mut sorted_boxes = boxes.iter().cloned().collect::<Vec<_>>();
-    let ascending = matches!(dir, Move::Up | Move::Left);
-    sorted_boxes.sort_by(|a, b| {
-        let key_a = match dir {
-            Move::Up | Move::Down => a.left.y,
-            Move::Left | Move::Right => a.left.x,
-        };
-        let key_b = match dir {
-            Move::Up | Move::Down => b.left.y,
-            Move::Left | Move::Right => b.left.x,
-        };
-        if ascending {
-            key_a.cmp(&key_b)
-        } else {
-            key_b.cmp(&key_a)
-        }
-    });
-    sorted_boxes
-}
-
-fn explore_vertical_push(
-    warehouse: &Warehouse,
-    start: Position,
-    dy: isize,
-) -> Option<HashSet<Box>> {
-    // DFS to find all boxes that can be pushed
-    let mut queue = VecDeque::new();
-    let mut visited = HashSet::new();
-
-    queue.push_back(start);
-
-    let mut found_empty = false;
-    let mut blocked = false;
-
-    while let Some(pos) = queue.pop_front() {
-        if !warehouse.is_in_bounds(&pos) {
-            blocked = true;
-            continue;
-        }
-
-        match warehouse.get_tile(&pos) {
-            Tile::Wall => blocked = true,
-            Tile::Empty => found_empty = true,
-            Tile::BoxLeft | Tile::BoxRight => {
-                let Some(bx) = warehouse.find_box_at_pos(&pos) else {
-                    // Should never happen
-                    blocked = true;
-                    continue;
-                };
-
-                if visited.insert(bx) {
-                    let next_left = Position {
-                        x: bx.left.x,
-                        y: (bx.left.y as isize + dy) as usize,
-                    };
-                    let next_right = Position {
-                        x: bx.right.x,
-                        y: (bx.right.y as isize + dy) as usize,
-                    };
-
-                    queue.push_back(next_left);
-                    queue.push_back(next_right);
-                }
-            }
-            // Should never happen
-            _ => panic!("Unexpected tile"),
+    fn make_moves(&mut self, moves: &[Move]) {
+        for &dir in moves {
+            self.try_move(dir);
         }
     }
 
-    if blocked {
-        None
-    } else if found_empty {
-        Some(visited)
-    } else {
-        // Should never happen
-        None
-    }
-}
-
-fn try_move_horiz(warehouse: &mut Warehouse, dir: Move) {
-    let (dx, dy) = deltas(&dir);
-
-    let Some(next_pos) = warehouse.robot.shifted(dx, dy) else {
-        return;
-    };
-
-    let mut visited = HashSet::new();
-
-    let mut scan_pos = next_pos;
-
-    loop {
-        if !warehouse.is_in_bounds(&scan_pos) {
+    fn try_move(&mut self, dir: Move) {
+        let (dx, dy) = dir.deltas();
+        let Some(next_pos) = self.robot.shifted(dx, dy) else {
             return;
+        };
+
+        let visited = if dy != 0 {
+            // For vertical movement, use explore_vertical_push
+            match self.explore_vertical_push(next_pos, dy) {
+                None => return,
+                Some(boxes) => boxes,
+            }
+        } else {
+            // For horizontal movement, scan linearly
+            let boxes = self.explore_horizontal_push(next_pos, dx);
+            if boxes.is_empty() && !matches!(self.get_tile(&next_pos), Tile::Empty) {
+                return;
+            }
+            boxes
+        };
+
+        // If we get here, movement is possible
+        let sorted_boxes = self.sort_boxes(&visited, dir);
+        for bx in sorted_boxes {
+            self.move_box(bx, dx, dy);
         }
+        self.robot = next_pos;
+    }
 
-        match warehouse.get_tile(&scan_pos) {
-            Tile::Wall => return,
-            Tile::Empty => break,
-            Tile::BoxLeft | Tile::BoxRight => {
-                let Some(bx) = warehouse.find_box_at_pos(&scan_pos) else {
-                    return;
-                };
+    fn explore_vertical_push(&self, start: Position, dy: isize) -> Option<HashSet<Box>> {
+        let mut queue = VecDeque::new();
+        let mut visited = HashSet::new();
+        let mut blocked = false;
 
-                visited.insert(bx);
+        queue.push_back(start);
 
-                let Some(next_scan) = scan_pos.shifted(dx, dy) else {
-                    return;
-                };
-                scan_pos = next_scan;
+        while let Some(pos) = queue.pop_front() {
+            if !self.is_in_bounds(&pos) {
+                blocked = true;
                 continue;
             }
-            // Should never happen
-            Tile::Robot => panic!("Robot found at {:?}", scan_pos),
+
+            match self.get_tile(&pos) {
+                Tile::Wall => {
+                    blocked = true;
+                }
+                Tile::BoxLeft | Tile::BoxRight => {
+                    let bx = self.find_box_at_pos(&pos).unwrap();
+
+                    if visited.insert(bx) {
+                        let next_left = Position {
+                            x: bx.left.x,
+                            y: (bx.left.y as isize + dy) as usize,
+                        };
+                        let next_right = Position {
+                            x: bx.right.x,
+                            y: (bx.right.y as isize + dy) as usize,
+                        };
+
+                        queue.push_back(next_left);
+                        queue.push_back(next_right);
+                    }
+                }
+                Tile::Empty => {}
+                Tile::Robot => panic!("Robot found at {:?}", pos),
+            }
+        }
+
+        if blocked {
+            None
+        } else {
+            Some(visited)
         }
     }
 
-    // If we got here, we found an empty tile (break)
-    let sorted_boxes = sorted_boxes(&visited, dir);
-    for bx in sorted_boxes {
-        move_box(warehouse, bx, dx, dy);
+    fn explore_horizontal_push(&self, start: Position, dx: isize) -> HashSet<Box> {
+        let mut visited = HashSet::new();
+        let mut scan_pos = start;
+
+        // First check if we can move at all
+        if !matches!(self.get_tile(&scan_pos), Tile::BoxLeft | Tile::BoxRight) {
+            return visited;
+        }
+
+        // Then scan for boxes until we hit a wall or empty space
+        loop {
+            if !self.is_in_bounds(&scan_pos) {
+                return HashSet::new();
+            }
+
+            match self.get_tile(&scan_pos) {
+                Tile::Wall => return HashSet::new(),
+                Tile::Empty => break,
+                Tile::BoxLeft | Tile::BoxRight => {
+                    let Some(bx) = self.find_box_at_pos(&scan_pos) else {
+                        return HashSet::new();
+                    };
+
+                    visited.insert(bx);
+
+                    let Some(next_scan) = scan_pos.shifted(dx, 0) else {
+                        return HashSet::new();
+                    };
+                    scan_pos = next_scan;
+                }
+                Tile::Robot => panic!("Robot found at {:?}", scan_pos),
+            }
+        }
+
+        visited
     }
-    warehouse.robot = next_pos;
-}
 
-fn move_box(warehouse: &mut Warehouse, bx: Box, dx: isize, dy: isize) {
-    warehouse.boxes.remove(&bx);
+    fn sort_boxes(&self, boxes: &HashSet<Box>, dir: Move) -> Vec<Box> {
+        let mut sorted_boxes = boxes.iter().cloned().collect::<Vec<_>>();
+        let ascending = matches!(dir, Move::Up | Move::Left);
+        sorted_boxes.sort_by(|a, b| {
+            let key_a = match dir {
+                Move::Up | Move::Down => a.left.y,
+                Move::Left | Move::Right => a.left.x,
+            };
+            let key_b = match dir {
+                Move::Up | Move::Down => b.left.y,
+                Move::Left | Move::Right => b.left.x,
+            };
+            if ascending {
+                key_a.cmp(&key_b)
+            } else {
+                key_b.cmp(&key_a)
+            }
+        });
+        sorted_boxes
+    }
 
-    let new_left = Position {
-        x: (bx.left.x as isize + dx) as usize,
-        y: (bx.left.y as isize + dy) as usize,
-    };
-    let new_right = Position {
-        x: (bx.right.x as isize + dx) as usize,
-        y: (bx.right.y as isize + dy) as usize,
-    };
-    let new_box = Box::new(new_left, new_right);
-    warehouse.boxes.insert(new_box);
-}
+    fn move_box(&mut self, bx: Box, dx: isize, dy: isize) {
+        self.boxes.remove(&bx);
 
-fn deltas(dir: &Move) -> (isize, isize) {
-    match dir {
-        Move::Left => (-1, 0),
-        Move::Right => (1, 0),
-        Move::Up => (0, -1),
-        Move::Down => (0, 1),
+        let new_left = Position {
+            x: (bx.left.x as isize + dx) as usize,
+            y: (bx.left.y as isize + dy) as usize,
+        };
+        let new_right = Position {
+            x: (bx.right.x as isize + dx) as usize,
+            y: (bx.right.y as isize + dy) as usize,
+        };
+        let new_box = Box::new(new_left, new_right);
+        self.boxes.insert(new_box);
     }
 }
 
-fn parse_input(input: &str) -> (Warehouse, Vec<Move>) {
-    let (grid, moves) = split_input_into_grid_and_moves(input);
-    (Warehouse::new(&grid), moves)
+#[derive(Debug)]
+enum ParseError {
+    InvalidMapChar(char),
+    InvalidMoveChar(char),
+    EmptyInput,
 }
 
-fn split_input_into_grid_and_moves(input: &str) -> (Vec<Vec<Tile>>, Vec<Move>) {
+impl std::fmt::Display for ParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ParseError::InvalidMapChar(c) => write!(f, "Invalid character in map: {}", c),
+            ParseError::InvalidMoveChar(c) => write!(f, "Invalid move character: {}", c),
+            ParseError::EmptyInput => write!(f, "Input is empty"),
+        }
+    }
+}
+
+impl std::error::Error for ParseError {}
+
+fn parse_input(input: &str) -> Result<(Warehouse, Vec<Move>), ParseError> {
     let mut lines = input.lines();
+
+    // Parse grid
     let grid: Vec<Vec<Tile>> = lines
         .by_ref()
         .take_while(|line| !line.is_empty())
         .map(|line| {
             line.chars()
-                .map(|c| parse_tile(c))
-                .flat_map(|(t1, t2)| vec![t1, t2])
-                .collect()
+                .map(|c| match c {
+                    '#' => Ok(vec![Tile::Wall, Tile::Wall]),
+                    'O' => Ok(vec![Tile::BoxLeft, Tile::BoxRight]),
+                    '@' => Ok(vec![Tile::Robot, Tile::Empty]),
+                    '.' => Ok(vec![Tile::Empty, Tile::Empty]),
+                    c => Err(ParseError::InvalidMapChar(c)),
+                })
+                .collect::<Result<Vec<_>, _>>()
+                .map(|v| v.into_iter().flatten().collect())
         })
-        .collect();
+        .collect::<Result<Vec<_>, _>>()?;
+
+    if grid.is_empty() {
+        return Err(ParseError::EmptyInput);
+    }
+
+    // Parse moves
     let moves: Vec<Move> = lines
-        .flat_map(|line| line.chars().map(parse_move))
-        .collect();
-    (grid, moves)
-}
+        .flat_map(|line| line.chars())
+        .map(|c| match c {
+            '^' => Ok(Move::Up),
+            'v' => Ok(Move::Down),
+            '<' => Ok(Move::Left),
+            '>' => Ok(Move::Right),
+            c => Err(ParseError::InvalidMoveChar(c)),
+        })
+        .collect::<Result<_, _>>()?;
 
-fn parse_tile(c: char) -> (Tile, Tile) {
-    match c {
-        '#' => (Tile::Wall, Tile::Wall),
-        'O' => (Tile::BoxLeft, Tile::BoxRight),
-        '@' => (Tile::Robot, Tile::Empty),
-        '.' => (Tile::Empty, Tile::Empty),
-        _ => panic!("Unexpected character in map: {}", c),
-    }
-}
-
-fn parse_move(c: char) -> Move {
-    match c {
-        '^' => Move::Up,
-        'v' => Move::Down,
-        '<' => Move::Left,
-        '>' => Move::Right,
-        _ => panic!("Unexpected move character: {}", c),
-    }
+    Ok((Warehouse::new(&grid), moves))
 }
 
 fn main() {
     let input = fs::read_to_string("15-input.txt").expect("Unable to read file");
-    let (mut warehouse, moves) = parse_input(&input);
+    let (mut warehouse, moves) = parse_input(&input).expect("Failed to parse input");
 
     println!("INITIAL STATE:\n{}", warehouse.display());
 
-    make_moves(&mut warehouse, &moves);
+    warehouse.make_moves(&moves);
     let result = warehouse.sum_boxes_gps_coord();
 
     println!("FINAL STATE:\n{}", warehouse.display());
@@ -457,6 +462,27 @@ v^^>>><<^^<>>^v^<v^vv<>v^<<>^<^v^v><^<<<><<^<v><v<>vv>>v><v^<vv<>v^<<^";
         use super::*;
 
         #[test]
+        fn parse_moves() {
+            let (_warehouse, moves) = parse_input(SMALL_EXAMPLE).unwrap();
+            assert_eq!(
+                moves,
+                vec![
+                    Move::Left,
+                    Move::Down,
+                    Move::Down,
+                    Move::Left,
+                    Move::Left,
+                    Move::Up,
+                    Move::Up,
+                    Move::Left,
+                    Move::Left,
+                    Move::Up,
+                    Move::Up,
+                ]
+            );
+        }
+
+        #[test]
         fn small_example() {
             const EXPECTED: &str = "\
 ##############
@@ -467,7 +493,7 @@ v^^>>><<^^<>>^v^<v^vv<>v^<<>^<^v^v><^<<<><<^<v><v<>vv>>v><v^<vv<>v^<<^";
 ##..........##
 ##############";
 
-            let (warehouse, _moves) = parse_input(SMALL_EXAMPLE);
+            let (warehouse, _moves) = parse_input(SMALL_EXAMPLE).unwrap();
             let display = warehouse.display();
             assert_eq!(display, EXPECTED);
         }
@@ -486,31 +512,9 @@ v^^>>><<^^<>>^v^<v^vv<>v^<<>^<^v^v><^<<<><<^<v><v<>vv>>v><v^<vv<>v^<<^";
 ##........[]......##
 ####################";
 
-            let (warehouse, _moves) = parse_input(LARGE_EXAMPLE);
+            let (warehouse, _moves) = parse_input(LARGE_EXAMPLE).unwrap();
             let display = warehouse.display();
             assert_eq!(display, EXPECTED);
-        }
-
-        #[test]
-        fn parse_moves() {
-            let (_warehouse, moves) = parse_input(SMALL_EXAMPLE);
-            // <vv<<^^<<^^"
-            assert_eq!(
-                moves,
-                vec![
-                    Move::Left,
-                    Move::Down,
-                    Move::Down,
-                    Move::Left,
-                    Move::Left,
-                    Move::Up,
-                    Move::Up,
-                    Move::Left,
-                    Move::Left,
-                    Move::Up,
-                    Move::Up,
-                ]
-            );
         }
     }
 
@@ -519,13 +523,13 @@ v^^>>><<^^<>>^v^<v^vv<>v^<<>^<^v^v><^<<<><<^<v><v<>vv>>v><v^<vv<>v^<<^";
 
         #[test]
         fn place_robot() {
-            let (warehouse, _moves) = parse_input(SMALL_EXAMPLE);
+            let (warehouse, _moves) = parse_input(SMALL_EXAMPLE).unwrap();
             assert_eq!(warehouse.robot, Position { x: 10, y: 3 });
         }
 
         #[test]
         fn place_walls() {
-            let (warehouse, _moves) = parse_input(SMALL_EXAMPLE);
+            let (warehouse, _moves) = parse_input(SMALL_EXAMPLE).unwrap();
             assert!(warehouse.walls.is_superset(&HashSet::from([
                 Position { x: 8, y: 1 },
                 Position { x: 9, y: 1 }
@@ -534,7 +538,7 @@ v^^>>><<^^<>>^v^<v^vv<>v^<<>^<^v^v><^<<<><<^<v><v<>vv>>v><v^<vv<>v^<<^";
 
         #[test]
         fn place_boxes() {
-            let (warehouse, _moves) = parse_input(SMALL_EXAMPLE);
+            let (warehouse, _moves) = parse_input(SMALL_EXAMPLE).unwrap();
             assert_eq!(
                 warehouse.boxes,
                 HashSet::from([
@@ -568,7 +572,14 @@ v^^>>><<^^<>>^v^<v^vv<>v^<<>^<^v^v><^<<<><<^<v><v<>vv>>v><v^<vv<>v^<<^";
                 Box::new(Position { x: 10, y: 3 }, Position { x: 11, y: 3 }),
                 Box::new(Position { x: 10, y: 5 }, Position { x: 11, y: 5 }),
             ]);
-            let sorted = sorted_boxes(&boxes, Move::Down);
+            let warehouse = Warehouse {
+                width: 20,
+                height: 20,
+                walls: HashSet::new(),
+                boxes: HashSet::new(),
+                robot: Position { x: 0, y: 0 },
+            };
+            let sorted = warehouse.sort_boxes(&boxes, Move::Down);
             assert_eq!(
                 sorted,
                 vec![
@@ -586,7 +597,14 @@ v^^>>><<^^<>>^v^<v^vv<>v^<<>^<^v^v><^<<<><<^<v><v<>vv>>v><v^<vv<>v^<<^";
                 Box::new(Position { x: 10, y: 3 }, Position { x: 11, y: 3 }),
                 Box::new(Position { x: 10, y: 5 }, Position { x: 11, y: 5 }),
             ]);
-            let sorted = sorted_boxes(&boxes, Move::Up);
+            let warehouse = Warehouse {
+                width: 20,
+                height: 20,
+                walls: HashSet::new(),
+                boxes: HashSet::new(),
+                robot: Position { x: 0, y: 0 },
+            };
+            let sorted = warehouse.sort_boxes(&boxes, Move::Up);
             assert_eq!(
                 sorted,
                 vec![
@@ -612,8 +630,8 @@ v^^>>><<^^<>>^v^<v^vv<>v^<<>^<^v^v><^<<<><<^<v><v<>vv>>v><v^<vv<>v^<<^";
 ##..........##
 ##############";
 
-            let (mut warehouse, _moves) = parse_input(SMALL_EXAMPLE);
-            try_move(&mut warehouse, Move::Left);
+            let (mut warehouse, _moves) = parse_input(SMALL_EXAMPLE).unwrap();
+            warehouse.try_move(Move::Left);
             let display = warehouse.display();
             assert_eq!(display, EXPECTED);
         }
@@ -623,21 +641,23 @@ v^^>>><<^^<>>^v^<v^vv<>v^<<>^<^v^v><^<<<><<^<v><v<>vv>>v><v^<vv<>v^<<^";
             const INPUT: &str = "\
 ##########
 #.O.OO.O@#
-##########";
+##########
+
+";
 
             const EXPECTED: &str = "\
 ####################
 ##[][][][]@.......##
 ####################";
 
-            let (mut warehouse, _moves) = parse_input(INPUT);
-            try_move(&mut warehouse, Move::Left);
-            try_move(&mut warehouse, Move::Left);
-            try_move(&mut warehouse, Move::Left);
-            try_move(&mut warehouse, Move::Left);
-            try_move(&mut warehouse, Move::Left);
-            try_move(&mut warehouse, Move::Left);
-            try_move(&mut warehouse, Move::Left);
+            let (mut warehouse, _moves) = parse_input(INPUT).unwrap();
+            warehouse.try_move(Move::Left);
+            warehouse.try_move(Move::Left);
+            warehouse.try_move(Move::Left);
+            warehouse.try_move(Move::Left);
+            warehouse.try_move(Move::Left);
+            warehouse.try_move(Move::Left);
+            warehouse.try_move(Move::Left);
             let display = warehouse.display();
             assert_eq!(display, EXPECTED);
         }
@@ -653,14 +673,14 @@ v^^>>><<^^<>>^v^<v^vv<>v^<<>^<^v^v><^<<<><<^<v><v<>vv>>v><v^<vv<>v^<<^";
 ##..........##
 ##############";
 
-            let (mut warehouse, _moves) = parse_input(SMALL_EXAMPLE);
-            try_move(&mut warehouse, Move::Left);
-            try_move(&mut warehouse, Move::Down);
-            try_move(&mut warehouse, Move::Down);
-            try_move(&mut warehouse, Move::Left);
-            try_move(&mut warehouse, Move::Left);
-            try_move(&mut warehouse, Move::Up);
-            try_move(&mut warehouse, Move::Up);
+            let (mut warehouse, _moves) = parse_input(SMALL_EXAMPLE).unwrap();
+            warehouse.try_move(Move::Left);
+            warehouse.try_move(Move::Down);
+            warehouse.try_move(Move::Down);
+            warehouse.try_move(Move::Left);
+            warehouse.try_move(Move::Left);
+            warehouse.try_move(Move::Up);
+            warehouse.try_move(Move::Up);
             let display = warehouse.display();
             assert_eq!(display, EXPECTED);
         }
@@ -680,8 +700,8 @@ v^^>>><<^^<>>^v^<v^vv<>v^<<>^<^v^v><^<<<><<^<v><v<>vv>>v><v^<vv<>v^<<^";
 ##..........##
 ##############";
 
-            let (mut warehouse, moves) = parse_input(SMALL_EXAMPLE);
-            make_moves(&mut warehouse, &moves);
+            let (mut warehouse, moves) = parse_input(SMALL_EXAMPLE).unwrap();
+            warehouse.make_moves(&moves);
             let display = warehouse.display();
             assert_eq!(display, EXPECTED);
             assert_eq!(warehouse.sum_boxes_gps_coord(), 105 + 207 + 306);
@@ -689,8 +709,8 @@ v^^>>><<^^<>>^v^<v^vv<>v^<<>^<^v^v><^<<<><<^<v><v<>vv>>v><v^<vv<>v^<<^";
 
         #[test]
         fn large_example() {
-            let (mut warehouse, moves) = parse_input(LARGE_EXAMPLE);
-            make_moves(&mut warehouse, &moves);
+            let (mut warehouse, moves) = parse_input(LARGE_EXAMPLE).unwrap();
+            warehouse.make_moves(&moves);
             let display = warehouse.display();
             assert_eq!(display, FINAL_GRID);
             assert_eq!(warehouse.sum_boxes_gps_coord(), 9021);
@@ -708,7 +728,7 @@ v^^>>><<^^<>>^v^<v^vv<>v^<<>^<^v^v><^<<<><<^<v><v<>vv>>v><v^<vv<>v^<<^";
 
         #[test]
         fn small_grid() {
-            let (warehouse, _moves) = parse_input(SMALL_EXAMPLE);
+            let (warehouse, _moves) = parse_input(SMALL_EXAMPLE).unwrap();
             assert_eq!(warehouse.sum_boxes_gps_coord(), 306 + 308 + 406);
         }
     }
